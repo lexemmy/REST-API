@@ -1,229 +1,135 @@
 package main
-
 import (
-	"encoding/json"
-	"fmt"
-	"net/http"
-	"text/template"
-	"time"
-	"log"
+  "github.com/gorilla/mux"
+  "database/sql"
+  _"github.com/go-sql-driver/mysql"
+  "net/http"
+  "encoding/json"
+  "fmt"
+  "io/ioutil"
+  "gopkg.in/go-playground/validator.v9"
 )
 
-var books []Book
-
-// Book model
+var validate *validator.Validate
 type Book struct {
-	Name        string `json:"name"`
-	Author      string `json:"author"`
-	PublishedAt string `json:"published_at"`
+  ID string `json:"id"`
+  Name string `json:"name" validate:"required"`
+  Author string `json:"author" validate:"required"`
+  Published_at string `json:"published_at"`
 }
-
-func loadBooks(w http.ResponseWriter, r *http.Request) {
-	bk, err := json.Marshal(books)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.Write(bk)
-}
-
-func create(w http.ResponseWriter, r *http.Request) {
-	tmpl, _ := template.ParseFiles("./assets/form.html")
-	tmpl.Execute(w, nil)
-}
-
-func postBook(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "must be a post request", http.StatusInternalServerError)
-		return
-	}
-	book := Book{
-		Name:        r.FormValue("name"),
-		Author:      r.FormValue("author"),
-		PublishedAt: time.Now().Local().String(),
-	}
-	books = append(books, book)
-
-	fmt.Fprintf(w, "New Book added: %s\n", book.Name)
-}
-
-func logger(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		fmt.Printf("request received %v\n", r.URL.Path)
-		next(w, r)
-	}
-}
-
+var db *sql.DB
+var err error
 func main() {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/books", logger(loadBooks))
-
-	fs := http.FileServer(http.Dir("assets/"))
-	mux.Handle("/static/", http.StripPrefix("/static", fs))
-
-	// Forms
-	mux.HandleFunc("/new", logger(create))
-	mux.HandleFunc("/create", logger(postBook))
-	// Middlewares
-	
-	log.Fatal(http.ListenAndServe(":8000", mux))
-	// Database
+db, err = sql.Open("mysql", "root:@/golang")
+  if err != nil {
+    panic(err.Error())
+  }
+  defer db.Close()
+  router := mux.NewRouter()
+  router.HandleFunc("/api/v1/books", getbooks).Methods("GET")
+  router.HandleFunc("/api/v1/books", createbook).Methods("POST")
+  router.HandleFunc("/api/v1/books/{id}", getbook).Methods("GET")
+  router.HandleFunc("/api/v1/books/{id}", updatebook).Methods("PUT")
+  router.HandleFunc("/api/v1/books/{id}", deletebook).Methods("DELETE") 
+  http.ListenAndServe(":8000", router)
+}
+func getbooks(w http.ResponseWriter, r *http.Request) {
+  w.Header().Set("Content-Type", "application/json")
+  var books []Book
+  result, err := db.Query("SELECT id, name, author, published_at from books")
+  if err != nil {
+    panic(err.Error())
+  }
+  defer result.Close()
+  for result.Next() {
+    var book Book
+    err := result.Scan(&book.ID, &book.Name, &book.Author, &book.Published_at)
+    if err != nil {
+      panic(err.Error())
+    }
+    books = append(books, book)
+  }
+  json.NewEncoder(w).Encode(books)
+} 
+func createbook(w http.ResponseWriter, r *http.Request) {
+  w.Header().Set("Content-Type", "application/json")
+  stmt, err := db.Prepare("INSERT INTO books(name,author) VALUES(?,?)")
+  if err != nil {
+    panic(err.Error())
+  }
+  body, err := ioutil.ReadAll(r.Body)
+  if err != nil {
+    panic(err.Error())
+  }
+  res := Book{}
+  keyVal := make(map[string]string)
+  json.Unmarshal(body, &keyVal)
+  json.Unmarshal(body, &res)
+  name := keyVal["name"]
+  author := keyVal["author"]
+  v := validator.New()
+ err = v.Struct(res)
+  for _, e := range err.(validator.ValidationErrors){
+    fmt.Println(e)
+    panic(err.Error())
+  }
+  _, err = stmt.Exec(name,author)
+  if err != nil {
+    panic(err.Error())
+  }
+  fmt.Fprintf(w, "New book was created")
 }
 
-// package main
-
-// import (
-// 	"encoding/json"
-// 	"html/template"
-// 	"net/http"
-// 	"time"
-// )
-
-// // Book model
-// type Book struct {
-// 	Name        string `json:"name"`
-// 	Author      string `json:"author"`
-// 	PublishedAt string `json:"published_at"`
-// }
-
-// func loadBooks(w http.ResponseWriter, r *http.Request) {
-// 	book := []Book{
-// 		Book{"The Silmarilion", "JRR Tolkein", time.Now().Local().String()},
-// 		Book{"The Hobbit", "JRR Tolkein", time.Now().Local().String()},
-// 	}
-
-// 	bk, err := json.Marshal(book)
-// 	if err != nil {
-// 		http.Error(w, err.Error(), http.StatusInternalServerError)
-// 		return
-// 	}
-
-// 	w.Header().Set("Content-Type", "application/json")
-// 	w.Write(bk)
-// }
-
-// func show(w http.ResponseWriter, r *http.Request) {
-// 	w.Header().Set("Content-Type", "text/html; charset=utf8")
-// 	tmpl := template.Must(template.ParseFiles("./assets/index.html"))
-// 	book := Book{"The Silmarilion", "JRR Tolkein", time.Now().Local().String()}
-// 	tmpl.Execute(w, book)
-// }
-
-// func main() {
-// 	// Serving JSON
-// 	mux := http.NewServeMux()
-// 	mux.HandleFunc("/books", loadBooks)
-
-// 	fs := http.FileServer(http.Dir("assets/"))
-// 	mux.Handle("/static/", http.StripPrefix("/static", fs))
-
-// 	// Templating
-// 	mux.HandleFunc("/book", show)
-// 	http.ListenAndServe(":8000", mux)
-// 	// Forms
-// 	// Middlewares
-// 	// Database
-// }
-
-/*package main
-
-import (
-	"encoding/json"
-	"net/http"
-	"time"
-)
-
-// Book model
-type Book struct {
-	Name        string `json:"name"`
-	Author      string `json:"author"`
-	PublishedAt string `json:"published_at"`
+func getbook(w http.ResponseWriter, r *http.Request) {
+  w.Header().Set("Content-Type", "application/json")
+  params := mux.Vars(r)
+  result, err := db.Query("SELECT id, name, author, published_at FROM books WHERE id = ?", params["id"])
+  if err != nil {
+    panic(err.Error())
+  }
+  defer result.Close()
+  var book Book
+  for result.Next() {
+    err := result.Scan(&book.ID, &book.Name, &book.Author, &book.Published_at)
+    if err != nil {
+      panic(err.Error())
+    }
+  }
+  json.NewEncoder(w).Encode(book)
 }
 
-func loadBooks(w http.ResponseWriter, r *http.Request) {
-	book := []Book{
-		Book{"The Silmarilion", "JRR Tolkein", time.Now().Local().String()},
-		Book{"The Hobbit", "JRR Tolkein", time.Now().Local().String()},
-	}
-
-	bk, err := json.Marshal(book)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.Write(bk)
+func updatebook(w http.ResponseWriter, r *http.Request) {
+  w.Header().Set("Content-Type", "application/json")
+  params := mux.Vars(r)
+  stmt, err := db.Prepare("UPDATE books SET name = ?, author = ? WHERE id = ?")
+  if err != nil {
+    panic(err.Error())
+  }
+  body, err := ioutil.ReadAll(r.Body)
+  if err != nil {
+    panic(err.Error())
+  }
+  keyVal := make(map[string]string)
+  json.Unmarshal(body, &keyVal)
+  newName := keyVal["name"]
+  newAuthor := keyVal["author"]
+  _, err = stmt.Exec(newName, newAuthor, params["id"])
+  if err != nil {
+    panic(err.Error())
+  }
+  fmt.Fprintf(w, "book with ID = %s was updated", params["id"])
 }
 
-func main() {
-	// Serving JSON
-	mux := http.NewServeMux()
-	mux.HandleFunc("/books", loadBooks)
-
-	fs := http.FileServer(http.Dir("assets/"))
-	mux.Handle("/static/", http.StripPrefix("/static", fs))
-
-	http.ListenAndServe(":8000", mux)
-	// Templating
-	// Forms
-	// Middlewares
-	// Database
-}
-*/
-/*
-package main
-
-import (
-	"fmt"
-	"net/http"
-)
-
-type books map[string]string
-
-func (b books) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	switch r.URL.Path {
-	case "/home":
-		fmt.Fprintf(w, "Welcome to books server. You came via %s\n", r.URL.String())
-	case "/about":
-		fmt.Fprintf(w, "All about our library of books. You came via %s\n", r.URL.String())
-	case "/book":
-		item := r.URL.Query().Get("item")
-		book, ok := b[item]
-		if !ok {
-			w.WriteHeader(http.StatusNotFound)
-			fmt.Fprintf(w, "book not found for: %q\n", item)
-			return
-		}
-		fmt.Fprintf(w, "The book is %s\n", book)
-	default:
-		w.WriteHeader(http.StatusNotFound)
-		fmt.Fprintf(w, "url not found! %s\n", r.URL.String())
-	}
-}
-
-func main() {
-	// Http Server
-	// http.HandleFunc("/home", func(w http.ResponseWriter, r *http.Request) {
-	// 	fmt.Fprint(w, "Hello, Go HTTP\n")
-	// })
-
-	// http.HandleFunc("/about", func(w http.ResponseWriter, r *http.Request) {
-	// 	fmt.Fprint(w, "About, HTTP in Go\n")
-	// })
-
-	// Routing
-	bk := books{}
-	bk["jrrtolkein"] = "The Silmarilion"
-	fmt.Println("server listening on port 8000")
-	mux := http.NewServeMux()
-	mux.Handle("/book", bk)
-
-	fs := http.FileServer(http.Dir("assets/"))
-	mux.Handle("/static/", http.StripPrefix("/static", fs))
-	http.ListenAndServe(":8000", mux)
-}
-
-*/
+func deletebook(w http.ResponseWriter, r *http.Request) {
+  w.Header().Set("Content-Type", "application/json")
+  params := mux.Vars(r)
+  stmt, err := db.Prepare("DELETE FROM books WHERE id = ?")
+  if err != nil {
+    panic(err.Error())
+  }
+  _, err = stmt.Exec(params["id"])
+  if err != nil {
+    panic(err.Error())
+  }
+  fmt.Fprintf(w, "book with ID = %s was deleted", params["id"])
+} 
